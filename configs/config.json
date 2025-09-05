@@ -1,0 +1,22 @@
+{
+  "universe": {
+    "symbols_csv": "symbols.csv",
+    "suffix": ".NS"
+  },
+  "scoring": {
+    "weights": {
+      "momentum": 50,
+      "rsi": 30,
+      "volume": 15,
+      "fundamentals": 40
+    },
+    "rsi_period": 14,
+    "sma_period": 20,
+    "vol_period": 30,
+    "top_n_watch": 5,
+    "top_n_avoid": 3
+  },
+  "thresholds": {
+    "intraday_alert_score": 70
+  }
+}
