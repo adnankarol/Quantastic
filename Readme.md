@@ -6,11 +6,13 @@ Quantastic is a robust stock analysis and alerting system designed to provide ac
 
 ## ✨ Key Features
 
-- **Quantastic Score**: A weighted score (−100 to +100) combining:
-  - **Technical Indicators**: SMA, RSI, Volume spikes.
-  - **Fundamentals**: Revenue growth, profit growth, and PE ratio.
+- **Quantastic Score**: A weighted score (0–100) combining:
+  - **Technical Indicators**: SMA, RSI, Volume spikes, MACD, ADX, Stochastic Oscillator.
+  - **Fundamentals**: Revenue growth, profit growth, ROE, Debt/Equity, and PE ratio.
 - **Daily Alerts**: Sends HTML-formatted Telegram alerts with top stock recommendations.
 - **Configurable**: Fully customizable scoring weights, thresholds, and stock universe.
+- **TEST Mode**: Run the script without sending Telegram messages for testing purposes.
+- **Docker Support**: Easily containerize and deploy the project using Docker.
 - **Automation**: Supports scheduling via cron jobs for daily execution.
 - **Extensible**: Modular design for easy integration of additional indicators or data sources.
 
@@ -60,7 +62,15 @@ conda activate quantastic
 ### 2. Configure the Project
 
 - **`configs/config.json`**: Update the configuration file to match your requirements.
-- **`configs/credentials.json`**: Add your Telegram bot token and chat IDs.
+  - **Validation Retries**: Adjust the number of retries for symbol validation in the `validation` section:
+
+    ```json
+    "validation": {
+      "retries": 3
+    }
+    ```
+
+- **Credentials Variables**: Add sensitive data like Telegram bot token and chat IDs to credentials.json.
 
 ### 3. Extract NSE Stock Symbols
 
@@ -74,30 +84,108 @@ python src/extract_symbols.py
 
 ## 🧐 How Quantastic Works
 
-Quantastic looks at each stock from **two angles**:
+Quantastic evaluates stocks using two complementary approaches:
 
 ### 1️⃣ Technical Score (How the stock is moving 📈)
 
-- **Price trend (SMA 20)**: Is it trending up or down?
-- **Momentum (RSI)**: Oversold → potential buy; Overbought → caution
-- **Volume spike**: Big jump in trading volume → could be interesting
+- **SMA (Simple Moving Average)**: Detects trend direction.
+- **RSI (Relative Strength Index)**: Identifies overbought or oversold conditions.
+- **Volume spikes**: Highlights unusually high trading activity.
+- **MACD (Moving Average Convergence Divergence)**: Confirms trend strength and direction.
+- **ADX (Average Directional Index)**: Indicates trend strength.
+- **Stochastic Oscillator**: Identifies overbought or oversold conditions.
 
 > Think of this as “Is the stock **hot right now**?” 🔥
 
 ### 2️⃣ Fundamental Score (How the company is doing 💰)
 
 - **Revenue growth** 📊: Did the company earn more than last quarter?
-- **Profit growth** 💵: Did it make more profit than last quarter?
-- **PE ratio** ⚖️: Price vs earnings — cheap → + points, expensive → - points
+- **Profit growth** 💵: Net income growth compared to prior quarter.
+- **ROE (Return on Equity)** 💪: Efficiency in generating returns.
+- **Debt/Equity ratio** ⚖️: Financial stability measure.
+- **PE ratio** ⚖️: Valuation — lower PE = higher score, higher PE = lower score.
 
-> Think of this as “Is the **business healthy**?” 💪
+> Think of this as “Is the **business healthy**?” 💼
 
 ### 3️⃣ Final Score
 
-- Combines Technical + Fundamental scores
+- Combines Technical + Fundamental scores (normalized 0–100)
 - **High score → Buy/Watch** 🟢
 - **Medium score → Hold** 🟡
 - **Low score → Avoid/Sell** 🔴
+
+---
+
+## 📊 Scoring Details
+
+### 1️⃣ Technical Score (tech_score)
+
+- Each component (SMA signal, RSI, volume, MACD, ADX, Stochastic) is normalized between 0 and 1.
+- Weighted average is computed using the configured weights in `config.json`.
+- **Range**: 0 (worst technical setup) → 1 (best technical setup)
+- **Displayed as**: 0–100 after `round(tech_score * 100)`
+
+---
+
+### 2️⃣ Fundamental Score (fund_score)
+
+- Components include:
+  - **P/E ratio** (scaled 0–1)
+  - **ROE** (normalized 0–1)
+  - **Debt/Equity** (inverted 0–1)
+  - **Revenue growth** (via tanh)
+  - **Net income growth** (via tanh)
+- Average of all components, clamped to 0–1.
+- **Range**: 0 (poor fundamentals) → 1 (excellent fundamentals)
+- **Displayed as**: 0–100 after `round(fund_score * 100)`
+
+---
+
+### 3️⃣ Final Score (final_score)
+
+- Calculated as the average of technical + fundamental scores:
+  \[
+  \text{final_score} = \text{clamp}(\text{mean}(tech_score, fund_score))
+  \]
+- **Range**: 0 → 1 before scaling.
+- **Displayed as**: 0–100 after `round(final_score * 100)`
+
+---
+
+### 4️⃣ Example
+
+Suppose for a stock:
+
+#### Technical Metrics
+
+| Metric          | Normalized Value (0–1) |
+|------------------|-------------------------|
+| SMA signal       | 1                       |
+| RSI signal       | 0.7                     |
+| Volume signal    | 0.8                     |
+| MACD signal      | 1                       |
+| ADX signal       | 0.6                     |
+| Stochastic signal| 0.5                     |
+| **Technical score** | **0.7667**             |
+
+#### Fundamental Metrics
+
+| Metric          | Normalized Value (0–1) |
+|------------------|-------------------------|
+| PE ratio         | 0.5                     |
+| ROE              | 0.7                     |
+| Debt/Equity      | 0.8                     |
+| Revenue growth   | 0.2                     |
+| Net income growth| 0.3                     |
+| **Fundamental score** | **0.5**             |
+
+#### Final Score
+
+\[
+\text{final_score} = \text{mean}(0.7667, 0.5) = 0.63335 \approx 63
+\]
+
+✅ **Recommendation**: Hold (medium score)
 
 ---
 
@@ -196,6 +284,4 @@ This project is licensed under the MIT License. See the `LICENSE` file for detai
 
 ## 📞 Contact
 
-For any inquiries or support, feel free to reach out via LinkedIn:
-
-- [Your LinkedIn Profile](https://www.linkedin.com/in/your-profile)
+For any inquiries or support, feel free to reach out via LinkedIn: [Adnan Karol](https://www.linkedin.com/in/your-profile)

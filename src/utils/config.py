@@ -4,10 +4,11 @@ __maintainer__ = "Adnan Karol"
 __email__ = "adnanmushtaq5@gmail.com"
 __status__ = "DEV"
 
-import json
+import os
 import pandas as pd
-from src.utils.logger import log_error
 from typing import Any, Dict, List
+from .logger import log_error
+from .helpers import load_json
 
 
 def load_config(path: str) -> Dict[str, Any]:
@@ -20,13 +21,12 @@ def load_config(path: str) -> Dict[str, Any]:
     Returns:
         Dict[str, Any]: The loaded configuration as a dictionary.
     """
-    with open(path, "r") as f:
-        return json.load(f)
+    return load_json(path)
 
 
 def load_credentials(credentials_path: str) -> Dict[str, Any]:
     """
-    Loads the credentials from a JSON file.
+    Loads the credentials from a JSON file and replaces placeholders with environment variables.
 
     Args:
         credentials_path (str): The path to the credentials file.
@@ -34,8 +34,11 @@ def load_credentials(credentials_path: str) -> Dict[str, Any]:
     Returns:
         Dict[str, Any]: The loaded credentials as a dictionary.
     """
-    with open(credentials_path, "r") as file:
-        return json.load(file)
+    creds = load_json(credentials_path)
+    creds["telegram"]["bot_token"] = os.getenv(
+        "TELEGRAM_BOT_TOKEN", creds["telegram"]["bot_token"]
+    )
+    return creds
 
 
 def read_symbols(csv_path: str) -> List[str]:

@@ -7,7 +7,7 @@ __status__ = "DEV"
 # Import Dependencies
 import os
 import shutil
-from logger import log_info, log_success, log_error  # Import logger methods
+from .logger import log_info, log_success, log_error  # Use relative import for logger
 
 # Define the root directory of the project
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"))

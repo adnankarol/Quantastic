@@ -12,77 +12,97 @@ import pandas as pd
 import html  # For escaping HTML content
 
 
-def compose_message(results: List[Dict[str, Any]], cfg: Dict[str, Any]) -> str:
+def compose_message(results: list, cfg: dict, skipped_symbols: list = None) -> str:
     """
-    Composes a Telegram message summarizing stock scores and recommendations.
+    Composes a Telegram message summarizing the stock analysis results.
 
     Args:
-        results (List[Dict[str, Any]]): List of stock scoring results.
-        cfg (Dict[str, Any]): Configuration dictionary.
+        results (list): List of dictionaries containing stock analysis results.
+        cfg (dict): Configuration dictionary.
+        skipped_symbols (list): List of skipped symbols with reasons.
 
     Returns:
-        str: The formatted Telegram message as an HTML string.
+        str: HTML-formatted message for Telegram.
     """
-    now = datetime.now().strftime("%d %b %Y, %H:%M IST")
+    try:
+        top_n_watch = cfg["scoring"].get("top_n_watch", 5)
+        top_n_avoid = cfg["scoring"].get("top_n_avoid", 3)
 
-    if not results:
-        return f"<b>🚀 Quantastic — {now}</b>\n⚠️ No data available today."
+        # Read thresholds from config
+        buy_threshold = cfg["thresholds"].get("buy_threshold", 70)
+        avoid_threshold = cfg["thresholds"].get("avoid_threshold", 39)
 
-    df = pd.DataFrame(results).dropna(subset=["final_score"])
-    if df.empty:
-        return f"<b>🚀 Quantastic — {now}</b>\n⚠️ No valid scores today."
+        # Categorize stocks
+        watchlist = [
+            stock for stock in results if stock["final_score"] >= buy_threshold
+        ]
+        avoidlist = [
+            stock for stock in results if stock["final_score"] <= avoid_threshold
+        ]
 
-    df = df.sort_values("final_score", ascending=False)
-    topn = int(cfg["scoring"]["top_n_watch"])
-    top_watch = df.head(topn)
+        # Sort watchlist and avoidlist
+        watchlist = sorted(watchlist, key=lambda x: x["final_score"], reverse=True)[
+            :top_n_watch
+        ]
+        avoidlist = sorted(avoidlist, key=lambda x: x["final_score"])[:top_n_avoid]
 
-    lines = [
-        f"<b>🚀 Quantastic — Market Open Alert</b> ({now})",
-        f"📊 Scanned <b>{len(df)}</b> stocks. Showing top <b>{min(topn, len(df))}</b> picks:\n",
-        "<b>🔥 Watchlist (Potential Buys)</b>",
-    ]
+        message = "<b>🚀 Quantastic — Market Open Alert</b>\n"
+        message += f"📊 Scanned <b>{len(results)}</b> stocks.\n\n"
 
-    for _, r in top_watch.iterrows():
-        symbol = html.escape(str(r.get("symbol", "")))
-        final_score = html.escape(str(int(r.get("final_score", 0))))
-        tech_score = html.escape(str(int(r.get("tech_score", 0))))
-        fund_score = html.escape(str(int(r.get("fund_score", 0))))
-        last_close = html.escape(f"{r.get('last_close', 0):.2f}")
-        low_1m = html.escape(f"{r.get('low_1m', 0):.2f}")
-        high_1m = html.escape(f"{r.get('high_1m', 0):.2f}")
-        low_3m = html.escape(f"{r.get('low_3m', 0):.2f}")
-        high_3m = html.escape(f"{r.get('high_3m', 0):.2f}")
-        rsi = html.escape(f"{r.get('rsi', 0):.1f}")
+        # Watchlist Section
+        if watchlist:
+            message += f"Showing top <b>{len(watchlist)}</b> picks:\n\n"
+            message += "<b>🔥 Watchlist (Potential Buys)</b>\n"
+            for stock in watchlist:
+                message += (
+                    f"🏷️ <b>{stock['symbol']}</b>\n"
+                    f"📊 Final Score: <b>{stock['final_score']}</b> (Tech: {stock['tech_score']}, Fund: {stock['fund_score']})\n"
+                    f"💰 Last Price: ₹{stock['last_close']:.2f}\n"
+                    f"✅ Recommendation: 🟢 <b>Buy</b>\n\n"
+                )
+        else:
+            message += "⚠️ No stocks met the criteria for the Watchlist today.\n\n"
 
-        pe_txt = ""
-        if isinstance(r.get("pe"), (int, float)):
-            pe_formatted = f"{r['pe']:.1f}"
-            pe_txt = f" | PE: {html.escape(pe_formatted)}"
+        # Avoid List Section
+        if avoidlist:
+            message += "---\n\n"
+            message += "<b>⚠️ Avoid List</b>\n"
+            for stock in avoidlist:
+                message += (
+                    f"🏷️ <b>{stock['symbol']}</b>\n"
+                    f"📊 Final Score: <b>{stock['final_score']}</b> (Tech: {stock['tech_score']}, Fund: {stock['fund_score']})\n"
+                    f"💰 Last Price: ₹{stock['last_close']:.2f}\n"
+                    f"❌ Recommendation: 🔴 <b>Avoid</b>\n\n"
+                )
+        else:
+            message += (
+                "---\n\n⚠️ No stocks met the criteria for the Avoid List today.\n\n"
+            )
 
-        recommendation = (
-            "🟢 <b>Buy</b>"
-            if r.get("final_score", 0) > 50
-            else "🟡 <b>Hold</b>" if r.get("final_score", 0) > 0 else "🔴 <b>Avoid</b>"
+        # Skipped Symbols Section
+        if skipped_symbols:
+            message += "---\n\n"
+            message += "<b>⚠️ Skipped Symbols</b>\n"
+            for symbol in skipped_symbols:
+                message += f"🏷️ <b>{symbol}</b>\n"
+            message += "\n"
+
+        # Add informational section at the end
+        message += "---\n\n"
+        message += "<i>ℹ️ <b>Score Ranges and Explanation</b></i>\n"
+        message += (
+            "<i>• <b>Technical Score (0–100)</b>: Evaluates stock movement using SMA, RSI, Volume, MACD, etc.</i>\n"
+            "<i>• <b>Fundamental Score (0–100)</b>: Assesses company health using PE ratio, ROE, Revenue Growth, etc.</i>\n"
+            "<i>• <b>Final Score (0–100)</b>: Average of Technical and Fundamental scores.</i>\n"
+            "<i>• <b>High Score (70–100)</b>: Strong Buy/Watch.</i>\n"
+            "<i>• <b>Medium Score (40–69)</b>: Hold/Neutral.</i>\n"
+            "<i>• <b>Low Score (0–39)</b>: Avoid/Sell.</i>\n"
         )
 
-        lines.append(
-            f"🏷️ {symbol} — <b>{final_score}</b> "
-            f"(Tech: {tech_score}, Fund: {fund_score})\n"
-            f"💰 Last Price: ₹{last_close}\n"
-            f"📉 1M Range: ₹{low_1m} → ₹{high_1m}\n"
-            f"📈 3M Range: ₹{low_3m} → ₹{high_3m}\n"
-            f"📊 RSI: {rsi}{pe_txt}\n"
-            f"✅ Recommendation: {recommendation}\n"
-        )
-
-    lines.append(
-        "\n<b>ℹ️ Quantastic Score:</b> Our proprietary score ranges from -100 to +100. "
-        "It combines technical indicators (SMA, RSI, Volume) and fundamentals (Revenue, Net Income, PE). "
-        "Higher scores indicate stronger buy signals.\n"
-        "<i>Quantastic Score blends simple technicals (SMA/RSI/Volume) "
-        "with fundamentals (Revenue & Net Income growth, PE). Educational use only.</i>"
-    )
-    return "\n".join(lines)
+        return message.strip()
+    except Exception as e:
+        log_error(f"❌ Error composing message: {e}")
+        return "❌ Error generating message."
 
 
 def send_telegram_message(bot_token: str, chat_id: str, text: str) -> None:

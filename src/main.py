@@ -9,15 +9,22 @@ __status__ = "DEV"
 """
 
 # Import Dependencies
-import time
+import sys
 import os
-import shutil
+import time
+import argparse
+from concurrent.futures import ThreadPoolExecutor
+
+# Add the `src` directory to the Python path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 from yfinance import Ticker
-from utils.logger import log_info, log_success, log_debug, log_error, log_warn
+from utils.logger import log_info, log_success, log_error, log_warn
 from utils.config import load_config, load_credentials, read_symbols
 from utils.scoring import compute_scores_for_ticker
 from utils.messaging import compose_message, send_telegram_message
 from utils.cleaner import cleanup_generated_files
+from utils.exceptions import ConfigError, DataFetchError
 
 # Variables
 CONFIG_PATH = os.path.join(
@@ -29,45 +36,73 @@ CREDENTIALS_PATH = os.path.join(
 SLEEP_BETWEEN_CALLS = 0.5  # seconds
 
 
-def validate_symbol(symbol: str, retries: int = 3) -> bool:
+def validate_symbol(
+    symbol: str, cfg: dict, retries: int = None, delisted_symbols: list = None
+) -> bool:
     """
     Validates if a stock symbol exists on Yahoo Finance.
 
     Args:
         symbol (str): The stock symbol to validate.
-        retries (int): Number of retries for validation.
+        cfg (dict): Configuration dictionary.
+        retries (int): Number of retries for validation (default: from config).
+        delisted_symbols (list): List to store delisted symbols.
 
     Returns:
         bool: True if the symbol is valid, False otherwise.
     """
+    retries = retries or cfg["validation"]["retries"]
     symbol_with_suffix = f"{symbol}.NS"  # Append .NS for NSE symbols
     for attempt in range(1, retries + 1):
         try:
             ticker = Ticker(symbol_with_suffix)
-            if not ticker.history(period="6mo").empty:
-                return True
-            log_warn(
-                f"⚠️ No data found for {symbol_with_suffix}. Attempt {attempt}/{retries}."
-            )
+            history = ticker.history(period="6mo")
+            if history is None or history.empty:
+                if "delisted" in str(history).lower():
+                    if delisted_symbols is not None:
+                        delisted_symbols.append(f"{symbol} (delisted)")
+                    return False
+                continue
+            return True
         except Exception as e:
-            log_error(
-                f"❌ Validation failed for {symbol_with_suffix} on attempt {attempt}: {e}"
-            )
-        if attempt < retries:
-            log_info(f"🔄 Retrying validation for {symbol_with_suffix}...")
-    log_warn(f"⚠️ Skipping {symbol_with_suffix} after {retries} failed attempts.")
+            if attempt == retries:
+                log_warn(f"⚠️ Skipping {symbol_with_suffix}: {e}")
+            if attempt < retries:
+                time.sleep(attempt * 2)  # Exponential backoff
+    if delisted_symbols is not None:
+        delisted_symbols.append(f"{symbol} (invalid)")
     return False
 
 
-def main() -> None:
+def process_symbol(symbol: str, cfg: dict, skipped_symbols: list) -> dict:
+    """
+    Processes a single stock symbol.
+
+    Args:
+        symbol (str): The stock symbol to process.
+        cfg (dict): Configuration dictionary.
+        skipped_symbols (list): List to store skipped symbols.
+
+    Returns:
+        dict: The result of processing the symbol.
+    """
+    if not validate_symbol(symbol, cfg):
+        skipped_symbols.append(symbol)
+        return None
+    try:
+        return compute_scores_for_ticker(symbol, cfg)
+    except Exception as e:
+        log_error(f"❌ Unexpected error for {symbol}: {type(e).__name__}: {e}")
+        skipped_symbols.append(symbol)
+        return None
+
+
+def main(args) -> None:
     """
     Main function for running the Quantastic stock scanner.
 
-    This function loads the configuration, reads stock symbols, computes scores
-    for each symbol, and sends a Telegram alert with the results.
-
     Args:
-        None
+        args: Parsed command-line arguments.
 
     Returns:
         None
@@ -76,42 +111,85 @@ def main() -> None:
         log_info("🚀 Starting Quantastic...")
         cfg = load_config(CONFIG_PATH)
         creds = load_credentials(CREDENTIALS_PATH)
+
+        # Ensure 'validation' key exists in cfg
+        if "validation" not in cfg or "retries" not in cfg["validation"]:
+            raise ConfigError("Missing 'validation' or 'retries' key in configuration.")
+
         symbols = read_symbols(
             os.path.join(
                 os.path.dirname(os.path.abspath(__file__)), "../data/symbols.csv"
             )
         )
+        if not symbols:
+            log_warn("⚠️ No symbols found in symbols.csv. Exiting.")
+            return
+
+        log_info(f"📊 Found {len(symbols)} symbol(s) to process.")
+
+        # Use the selected profile
+        cfg["scoring"]["weights"] = cfg["profiles"][args.profile]
 
         results = []
+        skipped_symbols = []
+        delisted_symbols = []
 
-        log_info(f"📊 Scanning {len(symbols)} symbol(s)...")
-        for i, s in enumerate(symbols, start=1):
-            log_info(f"🔍 [{i}/{len(symbols)}] Processing {s}...")
-            if not validate_symbol(s):
-                continue
-            res = compute_scores_for_ticker(s, cfg)
-            if res:
-                results.append(res)
-            time.sleep(SLEEP_BETWEEN_CALLS)
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            results = list(
+                executor.map(lambda s: process_symbol(s, cfg, skipped_symbols), symbols)
+            )
+        results = [res for res in results if res]  # Filter out None results
 
         log_success("🎯 All stocks scored successfully!")
 
-        msg = compose_message(results, cfg)
-        log_info("📤 Sending Telegram alert...")
-        chat_ids = creds["telegram"][
-            "chat_ids"
-        ]  # Read chat IDs as a list from credentials
-        for chat_id in chat_ids:
-            send_telegram_message(creds["telegram"]["bot_token"], chat_id, msg)
+        if delisted_symbols:
+            log_warn(f"⚠️ Delisted symbols: {', '.join(delisted_symbols)}")
+
+        if skipped_symbols:
+            log_warn(f"⚠️ Skipped symbols: {', '.join(skipped_symbols)}")
+
+        if results:
+            msg = compose_message(results, cfg, skipped_symbols)
+            print(msg)
+
+            if args.mode == "PROD":
+                unique_chat_ids = set(creds["telegram"]["chat_ids"])
+                for chat_id in unique_chat_ids:
+                    send_telegram_message(creds["telegram"]["bot_token"], chat_id, msg)
+                log_success("✅ Telegram messages sent successfully.")
+            else:
+                log_info("🛑 TEST mode: Telegram messages were not sent.")
+        else:
+            log_warn("⚠️ No valid results to process or send alerts for.")
+
         log_success("✅ Quantastic run completed.")
+    except ConfigError as e:
+        log_error(f"❌ Configuration error: {e}")
+    except DataFetchError as e:
+        log_error(f"❌ Data fetch error: {e}")
     except Exception as e:
-        log_error(f"❌ An error occurred: {e}")
-        raise
+        log_error(f"❌ Unexpected error: {e}")
     finally:
-        # Cleanup step to remove generated files
         cleanup_generated_files()
 
 
 if __name__ == "__main__":
-    main()
-    cleanup_generated_files()
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description="Run Quantastic stock scanner.")
+    parser.add_argument(
+        "--mode",
+        type=str,
+        choices=["TEST", "PROD"],
+        default="PROD",
+        help="Run mode: TEST (no messages sent) or PROD (messages sent). Default is PROD.",
+    )
+    parser.add_argument(
+        "--profile",
+        type=str,
+        choices=["growth", "value"],
+        default="growth",
+        help="Scoring profile to use: growth or value. Default is growth.",
+    )
+    args = parser.parse_args()
+
+    main(args)

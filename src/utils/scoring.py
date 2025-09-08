@@ -1,10 +1,9 @@
 __author__ = "Adnan Karol"
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 __maintainer__ = "Adnan Karol"
 __email__ = "adnanmushtaq5@gmail.com"
 __status__ = "DEV"
 
-# Import Dependencies
 import yfinance as yf
 import numpy as np
 import pandas as pd
@@ -13,24 +12,143 @@ from src.utils.logger import log_info, log_warn, log_error
 from utils.indicators import sma, rsi, clamp
 
 
+# -----------------------------
+# Helper Functions
+# -----------------------------
 def extract_scalar(series: pd.Series) -> Optional[float]:
+    try:
+        if series.empty:
+            return None
+        val = series.iloc[-1]
+        if isinstance(val, (pd.Series, np.ndarray)) and len(val) == 1:
+            return float(val.item())
+        elif isinstance(val, (int, float)):
+            return float(val)
+        else:
+            return None
+    except Exception as e:
+        log_error(f"Error extracting scalar value: {e}")
+        return None
+
+
+def normalize_0_1(value: float, min_value: float, max_value: float) -> float:
+    try:
+        return (
+            max(0, min(1, (value - min_value) / (max_value - min_value)))
+            if max_value > min_value
+            else 0
+        )
+    except Exception as e:
+        log_error(f"Error normalizing value: {e}")
+        return 0
+
+
+# -----------------------------
+# MACD Indicator
+# -----------------------------
+def compute_macd(data: pd.DataFrame, cfg: dict) -> float:
+    try:
+        fast, slow, signal = (
+            cfg["scoring"].get("macd_fast_period", 12),
+            cfg["scoring"].get("macd_slow_period", 26),
+            cfg["scoring"].get("macd_signal_period", 9),
+        )
+        data["EMA_fast"] = data["Close"].ewm(span=fast, adjust=False).mean()
+        data["EMA_slow"] = data["Close"].ewm(span=slow, adjust=False).mean()
+        data["MACD"] = data["EMA_fast"] - data["EMA_slow"]
+        data["Signal"] = data["MACD"].ewm(span=signal, adjust=False).mean()
+        return 1 if data["MACD"].iloc[-1] > data["Signal"].iloc[-1] else 0
+    except Exception as e:
+        log_error(f"Error computing MACD: {e}")
+        return 0
+
+
+# -----------------------------
+# Fundamental Score
+# -----------------------------
+def compute_fundamentals(ticker: str) -> float:
     """
-    Extracts the last scalar value from a pandas Series.
+    Computes the fundamental score for a stock.
 
     Args:
-        series (pd.Series): The pandas Series to extract the value from.
+        ticker (str): Stock ticker symbol.
 
     Returns:
-        Optional[float]: The last scalar value as a float, or None if the Series is empty.
+        float: The fundamental score.
     """
-    if not series.empty:
-        val = series.iloc[-1]
-        if isinstance(val, pd.Series):
-            val = val.item()
-        return float(val)
-    return None
+    try:
+        t = yf.Ticker(ticker)
+        info = t.info or {}
+        pe = info.get("trailingPE", 50)
+        roe = info.get("returnOnEquity", 0.15)
+        debt_eq = info.get("debtToEquity", 0.5)
+
+        # Normalize metrics 0–1
+        pe_score = 1 if pe < 25 else (0 if pe > 60 else 0.5)
+        roe_score = normalize_0_1(roe, 0, 0.3)
+        debt_score = 1 - normalize_0_1(debt_eq, 0, 2)
+
+        # Revenue/Net income growth (latest two quarters)
+        q_fin = t.quarterly_financials
+        rev_score = net_score = 0
+        if q_fin is not None and not q_fin.empty:
+            rev_series = next(
+                (
+                    q_fin.loc[k]
+                    for k in ["Total Revenue", "Revenue", "TotalRevenue"]
+                    if k in q_fin.index
+                ),
+                None,
+            )
+            net_series = next(
+                (q_fin.loc[k] for k in ["Net Income", "NetIncome"] if k in q_fin.index),
+                None,
+            )
+            if rev_series is not None and len(rev_series) >= 2:
+                rev_score = np.tanh(
+                    (rev_series.iloc[0] - rev_series.iloc[1]) / abs(rev_series.iloc[1])
+                )
+            if net_series is not None and len(net_series) >= 2:
+                net_score = np.tanh(
+                    (net_series.iloc[0] - net_series.iloc[1]) / abs(net_series.iloc[1])
+                )
+
+        fund_score = np.mean([pe_score, roe_score, debt_score, rev_score, net_score])
+        return clamp(fund_score)
+    except Exception as e:
+        log_warn(f"Fundamental calculation failed for {ticker}: {e}")
+        return 0
 
 
+def compute_fundamental_score(data: dict) -> int:
+    """
+    Computes the fundamental score for a stock.
+
+    Args:
+        data (dict): Fundamental data for the stock.
+
+    Returns:
+        int: The fundamental score.
+    """
+    try:
+        if data is None:
+            log_warn("⚠️ Fundamental data is None. Skipping calculation.")
+            return 0
+
+        # Ensure data is iterable
+        if not isinstance(data, dict):
+            log_error("❌ Fundamental data is not a dictionary. Skipping calculation.")
+            return 0
+
+        # ...existing fundamental score calculation logic...
+    except Exception as e:
+        log_error(f"❌ Fundamental calculation failed: {e}")
+        return 0
+
+
+# -----------------------------
+# Main Scoring Function
+# -----------------------------
 def compute_scores_for_ticker(
     ticker: str, cfg: Dict[str, Any]
 ) -> Optional[Dict[str, Any]]:
@@ -38,11 +156,11 @@ def compute_scores_for_ticker(
     Computes technical and fundamental scores for a given stock ticker.
 
     Args:
-        ticker (str): The stock ticker symbol.
+        ticker (str): Stock ticker symbol.
         cfg (Dict[str, Any]): Configuration dictionary containing scoring parameters.
 
     Returns:
-        Optional[Dict[str, Any]]: A dictionary containing scores and stock metrics, or None if scoring fails.
+        Optional[Dict[str, Any]]: Dictionary containing scores and stock metrics, or None if scoring fails.
     """
     try:
         suffix = cfg["universe"].get("suffix", "")
@@ -58,153 +176,71 @@ def compute_scores_for_ticker(
             interval="1d",
             progress=False,
             threads=False,
-            auto_adjust=False,
+            auto_adjust=False,  # Explicitly set auto_adjust to False
         )
 
         if df is None or df.empty or len(df) < 30:
             log_warn(f"No sufficient data for {ytick}")
             return None
-
         df = df.dropna()
         close = df["Close"]
         vol = df["Volume"]
 
+        # Technical metrics
         sma_period = int(cfg["scoring"].get("sma_period", 20))
         rsi_period = int(cfg["scoring"].get("rsi_period", 14))
         vol_period = int(cfg["scoring"].get("vol_period", 30))
 
-        sma20_series = sma(close, sma_period)
-        if sma20_series.empty or len(sma20_series) < sma_period:
-            log_warn(f"SMA calculation failed for {ytick} due to insufficient data.")
-            return None
-        sma20 = extract_scalar(sma20_series)
+        sma20 = extract_scalar(sma(close, sma_period))
         if sma20 is None:
-            log_warn(f"Insufficient data for SMA for {ytick}")
             return None
-
         last_close = extract_scalar(close)
-        if last_close is None:
-            log_warn(f"Insufficient data for last close for {ytick}")
-            return None
+        sma_signal = 1 if last_close > sma20 else 0
 
-        sma_signal = 1 if last_close > sma20 else -1
+        rsi_val = extract_scalar(rsi(close, rsi_period))
+        rsi_signal = 1 - (rsi_val / 100) if rsi_val is not None else 0
 
-        rsi14_series = rsi(close, rsi_period)
-        if rsi14_series.empty or len(rsi14_series) < rsi_period:
-            log_warn(f"RSI calculation failed for {ytick} due to insufficient data.")
-            return None
-        rsi14 = extract_scalar(rsi14_series)
-        if rsi14 is None:
-            log_warn(f"Insufficient data for RSI for {ytick}")
-            return None
+        vol_avg = extract_scalar(vol.rolling(vol_period).mean())
+        vol_signal = normalize_0_1(
+            extract_scalar(vol) if vol_avg else 0, vol_avg * 0.5, vol_avg * 2
+        )
 
-        rsi_signal = 1 if rsi14 < 30 else (-1 if rsi14 > 70 else 0)
+        macd_signal = compute_macd(df, cfg)
 
-        vol30_series = vol.rolling(vol_period).mean()
-        if vol30_series.empty or len(vol30_series) < vol_period:
-            log_warn(f"Volume calculation failed for {ytick} due to insufficient data.")
-            return None
-        vol30 = extract_scalar(vol30_series)
-        if vol30 is None:
-            log_warn(f"Insufficient data for volume for {ytick}")
-            return None
-
-        vol_signal = 1 if extract_scalar(vol.iloc[-1:]) > 2 * vol30 else 0
-
+        # Weighted technical score
         w = cfg["scoring"].get("weights", {})
-        tech_raw = (
-            w.get("momentum", 0) * sma_signal
-            + w.get("rsi", 0) * rsi_signal
-            + w.get("volume", 0) * vol_signal
-        )
-        max_raw = w.get("momentum", 0) + w.get("rsi", 0) + w.get("volume", 0)
-        tech_score = clamp((tech_raw / max_raw) * 100) if max_raw > 0 else 0
-
-        fund_score = 0
-        pe = None
-        try:
-            t = yf.Ticker(ytick)
-            info = t.info or {}
-            pe = info.get("trailingPE", None)
-
-            q_fin = t.quarterly_financials
-            if q_fin is not None and not q_fin.empty:
-                rev_now = rev_prev = net_now = net_prev = None
-
-                for k in ["Total Revenue", "Revenue", "TotalRevenue"]:
-                    if k in q_fin.index and q_fin.loc[k].shape[0] >= 2:
-                        rev_now = float(q_fin.loc[k].iloc[0])
-                        rev_prev = float(q_fin.loc[k].iloc[1])
-                        break
-
-                for k in ["Net Income", "NetIncome"]:
-                    if k in q_fin.index and q_fin.loc[k].shape[0] >= 2:
-                        net_now = float(q_fin.loc[k].iloc[0])
-                        net_prev = float(q_fin.loc[k].iloc[1])
-                        break
-
-                if rev_now is not None and rev_prev is not None and rev_prev != 0:
-                    rev_g = (rev_now - rev_prev) / abs(rev_prev)
-                    fund_score += 50 * np.tanh(rev_g)
-
-                if net_now is not None and net_prev is not None and net_prev != 0:
-                    net_g = (net_now - net_prev) / abs(net_prev)
-                    fund_score += 50 * np.tanh(net_g)
-
-            if isinstance(pe, (int, float)) and pe > 0:
-                if pe < 20:
-                    fund_score += 10
-                elif pe > 60:
-                    fund_score -= 10
-        except Exception as fe:
-            log_warn(f"Fundamentals unavailable for {ytick}: {fe}")
-
-        fund_score = clamp(fund_score)
-
-        last_price = extract_scalar(close)
-        low_1m, high_1m = (
-            float(close.tail(22).min().iloc[0]) if len(close) >= 22 else None,
-            float(close.tail(22).max().iloc[0]) if len(close) >= 22 else None,
-        )
-        low_3m, high_3m = (
-            float(close.tail(66).min().iloc[0]) if len(close) >= 66 else None,
-            float(close.tail(66).max().iloc[0]) if len(close) >= 66 else None,
+        tech_components = [
+            (sma_signal, w.get("sma", 0)),
+            (rsi_signal, w.get("rsi", 0)),
+            (vol_signal, w.get("volume", 0)),
+            (macd_signal, w.get("macd", 0)),
+        ]
+        tech_score = (
+            np.average(
+                [v for v, _ in tech_components],
+                weights=[wt for _, wt in tech_components],
+            )
+            if sum([wt for _, wt in tech_components]) > 0
+            else 0
         )
 
-        fund_w = w.get("fundamentals", 0)
-        tech_w = w.get("momentum", 0) + w.get("rsi", 0) + w.get("volume", 0)
-        total_w = tech_w + fund_w
-        final_score = (
-            clamp(tech_score * (tech_w / total_w) + fund_score * (fund_w / total_w))
-            if total_w > 0
-            else tech_score
-        )
+        # Fundamental score
+        fund_score = compute_fundamentals(ytick)
+
+        # Composite final score
+        final_score = clamp(np.mean([tech_score, fund_score]))
 
         return {
             "symbol": ticker,
             "yf_symbol": ytick,
-            "tech_score": int(tech_score),
-            "fund_score": int(fund_score),
-            "final_score": int(final_score),
-            "last_close": last_price,
-            "rsi": rsi14,
+            "tech_score": round(tech_score * 100),
+            "fund_score": round(fund_score * 100),
+            "final_score": round(final_score * 100),
+            "last_close": last_close,
+            "rsi": rsi_val,
             "sma20": sma20,
-            "volume": int(vol.iloc[-1].iloc[0]) if not vol.empty else None,
-            "vol30": int(vol30),
-            "pe": pe if isinstance(pe, (int, float)) else None,
-            "low_1m": low_1m,
-            "high_1m": high_1m,
-            "low_3m": low_3m,
-            "high_3m": high_3m,
+            "macd": macd_signal,
         }
-    except yf.YFPricesMissingError as e:
-        log_warn(f"⚠️ YFPricesMissingError for {ticker}: {e}")
-        return None
-
-    except ValueError as e:
-        log_warn(f"⚠️ ValueError for {ticker}: {e}")
-        return None
-
     except Exception as e:
         log_error(f"❌ Unexpected error for {ticker}: {type(e).__name__}: {e}")
         return None

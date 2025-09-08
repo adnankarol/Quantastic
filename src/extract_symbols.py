@@ -20,6 +20,7 @@ from bs4 import BeautifulSoup
 import csv
 import os
 import shutil
+import time
 from utils.logger import log_info, log_success, log_debug, log_error
 from utils.cleaner import cleanup_generated_files
 
@@ -34,57 +35,70 @@ if not os.path.exists(DATA_DIR):
     log_info(f"📂 Created data directory at {DATA_DIR}")
 
 
-def extract_symbols(url: str, output_file: str) -> None:
+def extract_symbols(url: str, output_file: str, retries: int = 3) -> None:
     """
     Extracts stock symbols from the given URL and saves them to a CSV file.
 
     Args:
         url (str): The URL of the webpage to scrape.
         output_file (str): The path to the output CSV file.
+        retries (int): Number of retries for network requests.
 
     Returns:
         None
     """
-    try:
-        log_info(f"🌐 Sending GET request to {url}")
-        # Send a GET request to the URL
-        response = requests.get(url)
-        response.raise_for_status()  # Raise an error for bad status codes
-        log_success(f"✅ Successfully fetched data from {url}")
+    attempt = 0
+    while attempt < retries:
+        try:
+            log_info(
+                f"🌐 Sending GET request to {url} (Attempt {attempt + 1}/{retries})"
+            )
+            response = requests.get(url)
+            response.raise_for_status()  # Raise an error for bad status codes
+            log_success(f"✅ Successfully fetched data from {url}")
 
-        # Parse the HTML content
-        soup = BeautifulSoup(response.text, "html.parser")
+            soup = BeautifulSoup(response.text, "html.parser")
+            table = soup.find("table")
+            if not table:
+                log_error("❌ No table found on the webpage.")
+                return
 
-        # Find the table containing the stock symbols
-        table = soup.find("table")
-        if not table:
-            log_error("❌ No table found on the webpage.")
+            rows = table.find_all("tr")
+            if not rows:
+                log_error("❌ No rows found in the table.")
+                return
+
+            symbols = []
+            for row in rows[1:]:  # Skip the header row
+                cols = row.find_all("td")
+                if len(cols) >= 2:
+                    symbol = cols[1].text.strip()
+                    if symbol:
+                        symbols.append([symbol])
+
+            log_info(f"📊 Extracted {len(symbols)} symbols from the webpage.")
+
+            with open(output_file, "w", newline="") as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerows(symbols)
+
+            log_success(
+                f"✅ Extracted {len(symbols)} symbols and saved to {output_file}"
+            )
             return
-
-        # Extract table rows
-        rows = table.find_all("tr")
-
-        # Extract symbols
-        symbols = []
-        for row in rows[1:]:  # Skip the header row
-            cols = row.find_all("td")
-            if len(cols) >= 2:  # Ensure there are enough columns
-                symbol = cols[1].text.strip()  # Extract from the second column
-                if symbol:  # Ensure the symbol is not empty
-                    symbols.append([symbol])  # Wrap symbol in a list for CSV format
-
-        log_info(f"📊 Extracted {len(symbols)} symbols from the webpage.")
-
-        # Save to a CSV file without a header
-        with open(output_file, "w", newline="") as csvfile:
-            writer = csv.writer(csvfile)
-            writer.writerows(symbols)
-
-        log_success(f"✅ Extracted {len(symbols)} symbols and saved to {output_file}")
-        log_info("📂 CSV file is ready for use in the project.")
-
-    except Exception as e:
-        log_error(f"❌ An error occurred: {e}")
+        except requests.exceptions.RequestException as e:
+            log_error(f"❌ Network error: {e}")
+            attempt += 1
+            if attempt < retries:
+                wait_time = attempt * 2
+                log_info(f"🔄 Retrying in {wait_time} seconds...")
+                time.sleep(wait_time)
+            else:
+                log_error("❌ Failed to fetch symbols after multiple attempts.")
+                return
+        except Exception as e:
+            log_error(f"❌ An unexpected error occurred: {e}")
+            return
 
 
 if __name__ == "__main__":

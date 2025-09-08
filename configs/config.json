@@ -8,15 +8,31 @@
       "momentum": 50,
       "rsi": 30,
       "volume": 15,
-      "fundamentals": 40
+      "macd": 20,
+      "adx": 10,
+      "stochastic": 10
     },
     "rsi_period": 14,
     "sma_period": 20,
     "vol_period": 30,
+    "macd_fast_period": 12,
+    "macd_slow_period": 26,
+    "macd_signal_period": 9,
     "top_n_watch": 5,
-    "top_n_avoid": 3
+    "top_n_avoid": 3,
+    "adx_period": 14,
+    "stochastic_period": 14
+  },
+  "profiles": {
+    "growth": { "momentum": 60, "rsi": 20, "volume": 10, "macd": 10 },
+    "value": { "momentum": 30, "rsi": 30, "volume": 20, "macd": 20 }
   },
   "thresholds": {
-    "intraday_alert_score": 70
+    "intraday_alert_score": 70,
+    "buy_threshold": 40,
+    "avoid_threshold": 39
+  },
+  "validation": {
+    "retries": 3
   }
 }
