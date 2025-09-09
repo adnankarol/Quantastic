@@ -55,9 +55,14 @@ Activate the environment:
 - configs/config.json: Update to match your requirements.
 - credentials.json: Add sensitive data like Telegram bot token and chat IDs.
 
-3. Extract NSE Stock Symbols: Fetch the latest NSE stock symbols and save them to data/symbols.csv:
+3. Extract NSE Stock Symbols: Fetch the latest NSE stock symbols and save them to data/symbols.csv
 
-      python src/extract_symbols.py
+         python src/extract_symbols.py
+
+4. To run the main script in test mode, and in PROD mode without the mode parameter.
+
+         python main.py --mode TEST
+         python main.py
 
 ## 🧐 How Quantastic Works
 
