@@ -21,16 +21,12 @@
     "top_n_watch": 5,
     "top_n_avoid": 3,
     "adx_period": 14,
-    "stochastic_period": 14
-  },
-  "profiles": {
-    "growth": { "momentum": 60, "rsi": 20, "volume": 10, "macd": 10 },
-    "value": { "momentum": 30, "rsi": 30, "volume": 20, "macd": 20 }
+    "stochastic_period": 14,
+    "avg_price_duration": 30
   },
   "thresholds": {
-    "intraday_alert_score": 70,
-    "buy_threshold": 40,
-    "avoid_threshold": 39
+    "intraday_alert_score": 60,
+    "buy_threshold": 20
   },
   "validation": {
     "retries": 3

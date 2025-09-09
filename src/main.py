@@ -13,7 +13,11 @@ import sys
 import os
 import time
 import argparse
+import logging  # Import the logging module
 from concurrent.futures import ThreadPoolExecutor
+
+# Suppress yfinance logs
+logging.getLogger("yfinance").setLevel(logging.ERROR)
 
 # Add the `src` directory to the Python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -53,6 +57,8 @@ def validate_symbol(
     """
     retries = retries or cfg["validation"]["retries"]
     symbol_with_suffix = f"{symbol}.NS"  # Append .NS for NSE symbols
+    error_message = None  # To store the final error message
+
     for attempt in range(1, retries + 1):
         try:
             ticker = Ticker(symbol_with_suffix)
@@ -61,14 +67,23 @@ def validate_symbol(
                 if "delisted" in str(history).lower():
                     if delisted_symbols is not None:
                         delisted_symbols.append(f"{symbol} (delisted)")
-                    return False
+                    error_message = f"{symbol_with_suffix} is possibly delisted."
+                    break
                 continue
-            return True
+            return True  # Symbol is valid
         except Exception as e:
-            if attempt == retries:
-                log_warn(f"⚠️ Skipping {symbol_with_suffix}: {e}")
+            if "401" in str(e):
+                error_message = "HTTP Error 401: Unauthorized access."
+                break
+            error_message = str(e)
             if attempt < retries:
                 time.sleep(attempt * 2)  # Exponential backoff
+
+    # Log the final status after all retries
+    if error_message:
+        log_warn(
+            f"⚠️ {symbol_with_suffix} could not be validated after {retries} retries: {error_message}"
+        )
     if delisted_symbols is not None:
         delisted_symbols.append(f"{symbol} (invalid)")
     return False
@@ -127,9 +142,6 @@ def main(args) -> None:
 
         log_info(f"📊 Found {len(symbols)} symbol(s) to process.")
 
-        # Use the selected profile
-        cfg["scoring"]["weights"] = cfg["profiles"][args.profile]
-
         results = []
         skipped_symbols = []
         delisted_symbols = []
@@ -182,13 +194,6 @@ if __name__ == "__main__":
         choices=["TEST", "PROD"],
         default="PROD",
         help="Run mode: TEST (no messages sent) or PROD (messages sent). Default is PROD.",
-    )
-    parser.add_argument(
-        "--profile",
-        type=str,
-        choices=["growth", "value"],
-        default="growth",
-        help="Scoring profile to use: growth or value. Default is growth.",
     )
     args = parser.parse_args()
 
