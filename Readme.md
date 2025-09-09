@@ -108,10 +108,34 @@ Quantastic evaluates stocks using two complementary approaches:
 
 ## 🕒 Automating with Cron Jobs
 
-Use cron jobs to run the scanner automatically at market open.
+- Use cron jobs to run the scanner automatically at market open.
 Example: Run every weekday at 10:00 AM IST.
 
-      0 10 ** 1-5 /Users/adnankarol/miniconda3/envs/quantastic/bin/python /Users/adnankarol/Desktop/Quantastic/src/main.py >> /Users/adnankarol/Desktop/Quantastic/logs/alerts.log 2>&1
+      0 10 * * 1-5 /Users/adnankarol/Desktop/Quantastic/run_main.sh
+
+- Make script executable and fix errors if any as per output
+
+      chmod +x /Users/adnankarol/Desktop/Quantastic/run_main.sh
+
+- Edit your crontab (Mac):
+
+      crontab -e
+
+- Add the line:
+
+      0 10 ** 1-5 /Users/adnankarol/Desktop/Quantastic/run_main.sh
+
+- Ensure the logs directory exists:
+
+      mkdir -p /Users/adnankarol/Desktop/Quantastic/logs
+
+- Check that cron jobs are registered:
+
+      crontab -l
+
+- Logs will be appended with timestamps in:
+
+      /Users/adnankarol/Desktop/Quantastic/logs/alerts.log
 
 ## 📜 License
 
