@@ -55,7 +55,7 @@ Activate the environment:
 - configs/config.json: Update to match your requirements.
 - credentials.json: Add sensitive data like Telegram bot token and chat IDs.
 
-3. Extract NSE Stock Symbols: Fetch the latest NSE stock symbols and save them to data/symbols.csv
+3. Extract NSE and BSE Stock Symbols: Fetch the latest NSE and BSE stock symbols and save them to data/symbols.csv
 
          python src/extract_symbols.py
 

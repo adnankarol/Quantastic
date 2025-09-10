@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # -----------------------------
-# Shell script to run main.py
+# Shell script to run main.py daily
 # using Conda environment in cron
 # -----------------------------
 
