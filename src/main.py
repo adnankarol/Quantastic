@@ -132,9 +132,7 @@ def main(args) -> None:
             raise ConfigError("Missing 'validation' or 'retries' key in configuration.")
 
         symbols = read_symbols(
-            os.path.join(
-                os.path.dirname(os.path.abspath(__file__)), "../data/symbols.csv"
-            )
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "data/symbols.csv")
         )
         if not symbols:
             log_warn("⚠️ No symbols found in symbols.csv. Exiting.")
